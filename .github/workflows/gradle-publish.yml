@@ -22,12 +22,15 @@ jobs:
       uses: actions/checkout@v2
 
     - name: Set up JDK
-      uses: actions/setup-java@v2
+      uses: actions/setup-java@v3
       with:
         java-version: '11'  # Choisissez la version de Java appropriée
+        distribution: adopt
 
-    - name: Build APK
-      run: ./gradlew multisrc:generateExtensions
+    - name: Generate multisrc sources
+      uses: gradle/gradle-build-action@v2
+      with:
+        arguments: :multisrc:generateExtensions
 
     - name: Upload APK
       uses: actions/upload-artifact@v2
