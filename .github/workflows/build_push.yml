@@ -1,29 +1,20 @@
 name: CI
-
 on:
   push:
     branches:
       - master
-    paths-ignore:
-      - '**.md'
-      - '.github/workflows/issue_moderator.yml'
+    tags:
+      - v*
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CI_CHUNK_SIZE: 65
-
 jobs:
-  prepare:
-    name: Prepare job
+  build:
+    name: Build app
     runs-on: ubuntu-latest
-    outputs:
-      individualMatrix: ${{ steps.generate-matrices.outputs.individualMatrix }}
-      multisrcMatrix: ${{ steps.generate-matrices.outputs.multisrcMatrix }}
-    env:
-      CI_MODULE_GEN: true
+
     steps:
       - name: Clone repo
         uses: actions/checkout@v3
@@ -34,172 +25,82 @@ jobs:
       - name: Set up JDK
         uses: actions/setup-java@v3
         with:
-          java-version: 11
+          java-version: 17
           distribution: adopt
 
-      - name: Generate multisrc sources
-        uses: gradle/gradle-build-action@v2
+      - name: Build app and run unit tests
+        uses: gradle/gradle-command-action@v2
         with:
-          arguments: :multisrc:generateExtensions
+          arguments: lintKotlin assembleStandardRelease testReleaseUnitTest
 
-      - name: Get number of modules
+      # Sign APK and create release for tags
+
+      - name: Get tag name
+        if: startsWith(github.ref, 'refs/tags/') && github.repository == 'tachiyomiorg/tachiyomi'
         run: |
           set -x
-          ./gradlew -q projects | grep '.*extensions\:\(individual\|multisrc\)\:.*\:.*' > projects.txt
+          echo "VERSION_TAG=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
 
-          echo "NUM_INDIVIDUAL_MODULES=$(cat projects.txt | grep '.*\:individual\:.*' | wc -l)" >> $GITHUB_ENV
-          echo "NUM_MULTISRC_MODULES=$(cat projects.txt | grep '.*\:multisrc\:.*' | wc -l)" >> $GITHUB_ENV
-
-      - id: generate-matrices
-        name: Create output matrices
-        uses: actions/github-script@v6
+      - name: Sign APK
+        if: startsWith(github.ref, 'refs/tags/') && github.repository == 'tachiyomiorg/tachiyomi'
+        uses: r0adkll/sign-android-release@v1
         with:
-          script: |
-            const numIndividualModules = process.env.NUM_INDIVIDUAL_MODULES;
-            const numMultisrcModules = process.env.NUM_MULTISRC_MODULES;
-            const chunkSize = process.env.CI_CHUNK_SIZE;
+          releaseDirectory: app/build/outputs/apk/standard/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.ALIAS }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
 
-            const numIndividualChunks = Math.ceil(numIndividualModules / chunkSize);
-            const numMultisrcChunks = Math.ceil(numMultisrcModules / chunkSize);
-
-            console.log(`Individual modules: ${numIndividualModules} (${numIndividualChunks} chunks of ${chunkSize})`);
-            console.log(`Multi-source modules: ${numMultisrcModules} (${numMultisrcChunks} chunks of ${chunkSize})`);
-
-            core.setOutput('individualMatrix', { 'chunk': [...Array(numIndividualChunks).keys()] });
-            core.setOutput('multisrcMatrix', { 'chunk': [...Array(numMultisrcChunks).keys()] });
-
-  build_multisrc:
-    name: Build multisrc modules
-    needs: prepare
-    runs-on: ubuntu-latest
-    strategy:
-      matrix: ${{ fromJSON(needs.prepare.outputs.multisrcMatrix) }}
-    steps:
-      - name: Checkout master branch
-        uses: actions/checkout@v3
-
-      - name: Set up JDK
-        uses: actions/setup-java@v3
-        with:
-          java-version: 11
-          distribution: adopt
-
-      - name: Prepare signing key
+      - name: Clean up build artifacts
+        if: startsWith(github.ref, 'refs/tags/') && github.repository == 'tachiyomiorg/tachiyomi'
         run: |
-          echo ${{ secrets.SIGNING_KEY }} | base64 -d > signingkey.jks
+          set -e
 
-      - name: Generate sources from the multi-source library
-        uses: gradle/gradle-build-action@v2
+          mv app/build/outputs/apk/standard/release/app-standard-universal-release-unsigned-signed.apk tachiyomi-${{ env.VERSION_TAG }}.apk
+          sha=`sha256sum tachiyomi-${{ env.VERSION_TAG }}.apk | awk '{ print $1 }'`
+          echo "APK_UNIVERSAL_SHA=$sha" >> $GITHUB_ENV
+
+          cp app/build/outputs/apk/standard/release/app-standard-arm64-v8a-release-unsigned-signed.apk tachiyomi-arm64-v8a-${{ env.VERSION_TAG }}.apk
+          sha=`sha256sum tachiyomi-arm64-v8a-${{ env.VERSION_TAG }}.apk | awk '{ print $1 }'`
+          echo "APK_ARM64_V8A_SHA=$sha" >> $GITHUB_ENV
+
+          cp app/build/outputs/apk/standard/release/app-standard-armeabi-v7a-release-unsigned-signed.apk tachiyomi-armeabi-v7a-${{ env.VERSION_TAG }}.apk
+          sha=`sha256sum tachiyomi-armeabi-v7a-${{ env.VERSION_TAG }}.apk | awk '{ print $1 }'`
+          echo "APK_ARMEABI_V7A_SHA=$sha" >> $GITHUB_ENV
+
+          cp app/build/outputs/apk/standard/release/app-standard-x86-release-unsigned-signed.apk tachiyomi-x86-${{ env.VERSION_TAG }}.apk
+          sha=`sha256sum tachiyomi-x86-${{ env.VERSION_TAG }}.apk | awk '{ print $1 }'`
+          echo "APK_X86_SHA=$sha" >> $GITHUB_ENV
+          
+          cp app/build/outputs/apk/standard/release/app-standard-x86_64-release-unsigned-signed.apk tachiyomi-x86_64-${{ env.VERSION_TAG }}.apk
+          sha=`sha256sum tachiyomi-x86_64-${{ env.VERSION_TAG }}.apk | awk '{ print $1 }'`
+          echo "APK_X86_64_SHA=$sha" >> $GITHUB_ENV
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/') && github.repository == 'tachiyomiorg/tachiyomi'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.VERSION_TAG }}
+          name: Tachiyomi ${{ env.VERSION_TAG }}
+          body: |
+            ---
+
+            ### Checksums
+
+            | Variant | SHA-256 |
+            | ------- | ------- |
+            | Universal | ${{ env.APK_UNIVERSAL_SHA }}
+            | arm64-v8a | ${{ env.APK_ARM64_V8A_SHA }}
+            | armeabi-v7a | ${{ env.APK_ARMEABI_V7A_SHA }}
+            | x86 | ${{ env.APK_X86_SHA }} |
+            | x86_64 | ${{ env.APK_X86_64_SHA }} |
+          files: |
+            tachiyomi-${{ env.VERSION_TAG }}.apk
+            tachiyomi-arm64-v8a-${{ env.VERSION_TAG }}.apk
+            tachiyomi-armeabi-v7a-${{ env.VERSION_TAG }}.apk
+            tachiyomi-x86-${{ env.VERSION_TAG }}.apk
+            tachiyomi-x86_64-${{ env.VERSION_TAG }}.apk
+          draft: true
+          prerelease: false
         env:
-          CI_MODULE_GEN: "true"
-        with:
-          arguments: :multisrc:generateExtensions
-
-      - name: Build extensions (chunk ${{ matrix.chunk }})
-        uses: gradle/gradle-build-action@v2
-        env:
-          CI_MULTISRC: "true"
-          CI_CHUNK_NUM: ${{ matrix.chunk }}
-          ALIAS: ${{ secrets.ALIAS }}
-          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        with:
-          arguments: assembleRelease
-
-      - name: Upload APKs (chunk ${{ matrix.chunk }})
-        uses: actions/upload-artifact@v3
-        if: "github.repository == 'tachiyomiorg/tachiyomi-extensions'"
-        with:
-          name: "multisrc-apks-${{ matrix.chunk }}"
-          path: "**/*.apk"
-          retention-days: 1
-
-      - name: Clean up CI files
-        run: rm signingkey.jks
-
-  build_individual:
-    name: Build individual modules
-    needs: prepare
-    runs-on: ubuntu-latest
-    strategy:
-      matrix: ${{ fromJSON(needs.prepare.outputs.individualMatrix) }}
-    steps:
-      - name: Checkout master branch
-        uses: actions/checkout@v3
-
-      - name: Set up JDK
-        uses: actions/setup-java@v3
-        with:
-          java-version: 11
-          distribution: adopt
-
-      - name: Prepare signing key
-        run: |
-          echo ${{ secrets.SIGNING_KEY }} | base64 -d > signingkey.jks
-
-      - name: Build extensions (chunk ${{ matrix.chunk }})
-        uses: gradle/gradle-build-action@v2
-        env:
-          CI_MULTISRC: "false"
-          CI_CHUNK_NUM: ${{ matrix.chunk }}
-          ALIAS: ${{ secrets.ALIAS }}
-          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        with:
-          arguments: assembleRelease
-
-      - name: Upload APKs (chunk ${{ matrix.chunk }})
-        uses: actions/upload-artifact@v3
-        if: "github.repository == 'tachiyomiorg/tachiyomi-extensions'"
-        with:
-          name: "individual-apks-${{ matrix.chunk }}"
-          path: "**/*.apk"
-          retention-days: 1
-
-      - name: Clean up CI files
-        run: rm signingkey.jks
-
-  publish_repo:
-    name: Publish repo
-    needs:
-      - build_multisrc
-      - build_individual
-    if: "github.repository == 'tachiyomiorg/tachiyomi-extensions'"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download APK artifacts
-        uses: actions/download-artifact@v3
-        with:
-          path: ~/apk-artifacts
-
-      - name: Set up JDK
-        uses: actions/setup-java@v3
-        with:
-          java-version: 11
-          distribution: adopt
-
-      - name: Checkout master branch
-        uses: actions/checkout@v3
-        with:
-          ref: master
-          path: master
-
-      - name: Create repo artifacts
-        run: |
-          cd master
-          ./.github/scripts/move-apks.sh
-          INSPECTOR_LINK="$(curl -s "https://api.github.com/repos/tachiyomiorg/tachiyomi-extensions-inspector/releases/latest" | jq -r '.assets[0].browser_download_url')"
-          curl -L "$INSPECTOR_LINK" -o ./Inspector.jar
-          java -jar ./Inspector.jar "apk" "output.json" "tmp"
-          ./.github/scripts/create-repo.sh
-
-      - name: Checkout repo branch
-        uses: actions/checkout@v3
-        with:
-          ref: repo
-          path: repo
-
-      - name: Deploy repo
-        run: |
-          cd repo
-          ../master/.github/scripts/commit-repo.sh
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
