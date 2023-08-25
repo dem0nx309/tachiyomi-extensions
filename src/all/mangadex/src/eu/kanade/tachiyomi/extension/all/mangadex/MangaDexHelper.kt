@@ -399,7 +399,7 @@ class MangaDexHelper(lang: String) {
 
         attr.volume?.let {
             if (it.isNotEmpty()) {
-                chapterName.add("Vol.$it")
+                chapterName.add("Volume.$it")
             }
         }
 
