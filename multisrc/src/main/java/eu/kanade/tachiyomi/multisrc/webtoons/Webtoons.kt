@@ -255,7 +255,7 @@ open class Webtoons(
         chapter.name = element.select("a > div.row > div.info > p.sub_title > span.ellipsis").text()
         val select = element.select("a > div.row > div.num")
         if (select.isNotEmpty()) {
-            chapter.name += " Ch. " + select.text().substringAfter("#")
+            chapter.name = "Ch. " + select.text().substringAfter("#") + " " + chapter.name
         }
         if (element.select(".ico_bgm").isNotEmpty()) {
             chapter.name += " ♫"
