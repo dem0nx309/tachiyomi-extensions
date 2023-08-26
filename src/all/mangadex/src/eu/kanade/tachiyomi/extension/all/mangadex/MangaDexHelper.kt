@@ -397,24 +397,9 @@ class MangaDexHelper(lang: String) {
         val chapterName = mutableListOf<String>()
         // Build chapter name
 
-        attr.volume?.let {
-            if (it.isNotEmpty()) {
-                chapterName.add("Volume.$it")
-            }
-        }
-
         attr.chapter?.let {
             if (it.isNotEmpty()) {
                 chapterName.add("Ch.$it")
-            }
-        }
-
-        attr.title?.let {
-            if (it.isNotEmpty()) {
-                if (chapterName.isNotEmpty()) {
-                    chapterName.add("-")
-                }
-                chapterName.add(it)
             }
         }
 
@@ -429,7 +414,12 @@ class MangaDexHelper(lang: String) {
             url = "/chapter/${chapterDataDto.id}"
             name = chapterName.joinToString(" ").removeEntitiesAndMarkdown()
             date_upload = parseDate(attr.publishAt)
-            scanlator = groups
+            name += if (groups.isNotEmpty()) {
+                " - $groups"
+            } else {
+                ""
+            }
+            scanlator = ""
         }
     }
 
